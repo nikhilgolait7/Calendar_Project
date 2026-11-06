@@ -87,7 +87,8 @@
     </div>
 
     <script>
-        const SERVER_URL = 'http://localhost:3000';
+        // Same server that serves this page (works on phone, PC, Render or localhost). Falls back to Render if the file is opened directly.
+        const SERVER_URL = (location.protocol === 'file:') ? 'https://digital-calendar-wvzc.onrender.com' : location.origin;
         const socket = io(SERVER_URL);
         const tbody = document.getElementById('adminTableBody');
         const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];

@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 
 const express = require('express');
@@ -6,6 +5,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
 const { Server } = require('socket.io');
 const Led = require('./models/Led');
 
@@ -37,12 +37,17 @@ app.use(express.json());
 // Frontend files are in the parent directory
 // of calendar-backend.
 
-const frontendPath = path.resolve(__dirname, '..');
+// Looks in the parent folder first (your layout), then ./public, then next to server.js.
+const candidates = [path.resolve(__dirname, '..'), path.join(__dirname, 'public'), __dirname];
+const frontendPath = candidates.find(dir => fs.existsSync(path.join(dir, 'index.html'))) || candidates[0];
 
 console.log('Frontend directory:', frontendPath);
 
-// Serve HTML, CSS and JavaScript files
-app.use(express.static(frontendPath));
+// Serve ONLY the four frontend files. (express.static on a whole folder would also
+// expose server.js, package.json and any env file that happens to sit in that folder.)
+['index.html', 'admin.html', 'app.js', 'style.css'].forEach(file => {
+    app.get('/' + file, (req, res) => res.sendFile(path.join(frontendPath, file)));
+});
 
 // Main Calendar Page
 app.get('/', (req, res) => {
@@ -214,6 +219,62 @@ app.post('/api/delete-leds', async (req, res) => {
         res.status(500).json({
             error: err.message
         });
+    }
+});
+
+// ------------------------------------
+// API: COMPACT FEED FOR THE ESP32
+// ------------------------------------
+// Plain text, 3 lines: 7 weekdays, 31 dates, 12 months.
+// Each entry is a 6-digit hex colour, or empty when that LED has no colour.
+// Usage: /api/esp-state?y=2026&m=10      (m = 0-11, the month the board is showing)
+
+app.get('/api/esp-state', async (req, res) => {
+    const y = parseInt(req.query.y, 10);
+    const m = parseInt(req.query.m, 10);
+
+    if (!(y >= 2020 && y <= 2099) || !(m >= 0 && m <= 11)) {
+        return res.status(400).send('bad y/m');
+    }
+    const mm = String(m + 1).padStart(2, '0');
+
+    try {
+        const leds = await Led.find({
+            isOn: true,
+            $or: [
+                { type: 'day' },
+                { type: 'date',  dateString: { $regex: `^${y}-${mm}-` } },
+                { type: 'month', dateString: { $regex: `^${y}-` } }
+            ]
+        }).lean();
+
+        const days = Array(7).fill('');
+        const dates = Array(31).fill('');
+        const months = Array(12).fill('');
+
+        for (const led of leds) {
+            const c = /^#[0-9a-fA-F]{6}$/.test(led.color) ? led.color.slice(1).toLowerCase() : '';
+            if (!c) continue;
+
+            if (led.type === 'day') {
+                const i = parseInt(led.dateString.split('-')[1], 10);
+                if (i >= 0 && i <= 6) days[i] = c;
+            } else if (led.type === 'date') {
+                const i = parseInt(led.dateString.slice(8, 10), 10) - 1;
+                if (i >= 0 && i <= 30) dates[i] = c;
+            } else if (led.type === 'month') {
+                const i = parseInt(led.dateString.slice(5, 7), 10) - 1;
+                if (i >= 0 && i <= 11) months[i] = c;
+            }
+        }
+
+        res.type('text/plain').send(
+            [days, dates, months].map(a => a.join(',')).join('\n') + '\n'
+        );
+
+    } catch (err) {
+        console.error('❌ ESP feed error:', err.message);
+        res.status(500).send('error');
     }
 });
 

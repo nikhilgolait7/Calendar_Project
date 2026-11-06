@@ -1,4 +1,5 @@
-const SERVER_URL = 'http://127.0.0.1:3000'; 
+// Same server that serves this page (works on phone, PC, Render or localhost). Falls back to Render if the file is opened directly.
+const SERVER_URL = (location.protocol === 'file:') ? 'https://digital-calendar-wvzc.onrender.com' : location.origin;
 
 function showToast(message, type = 'info') {
     const container = document.getElementById('toastContainer');
@@ -59,6 +60,9 @@ async function fetchDataAndRender() {
         console.log("Fetching data from DB...");
         const response = await fetch(`${SERVER_URL}/api/get-state`);
         const data = await response.json();
+        if (!response.ok || !Array.isArray(data)) {
+            throw new Error(data.error || `HTTP ${response.status}`);
+        }
         
         console.log("Data received from DB:", data);
 
@@ -70,7 +74,8 @@ async function fetchDataAndRender() {
         renderCalendar();
     } catch (error) {
         console.error("❌ Fetch Error:", error);
-        showToast("Could not connect to database", "error");
+        // "Failed to fetch" = server unreachable. Anything else = the server answered with an error (usually MongoDB).
+        showToast(`Could not load data: ${error.message}`, "error");
         renderCalendar(); // Render empty just in case
     }
 }
@@ -457,6 +462,10 @@ document.addEventListener("DOMContentLoaded", () => {
         socket.on('led_updated', (led) => {
             if (led.isOn) localDatabase[led.dateString] = led;
             else delete localDatabase[led.dateString];
+            renderCalendar();
+        });
+        socket.on('leds_deleted', (dateStrings) => {
+            dateStrings.forEach(d => delete localDatabase[d]);
             renderCalendar();
         });
         socket.on('connect', fetchDataAndRender); // re-sync after any reconnect
