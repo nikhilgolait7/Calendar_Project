@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - Database Monitor</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        :root {
+            --bg-body: #f3f4f6; --card-bg: #ffffff; --text-main: #111827;
+            --text-muted: #6b7280; --accent-red: #f50057; --border-color: #e5e7eb;
+            --hover-bg: #f9fafb; --shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+            --table-header: #f9fafb; --input-bg: #ffffff;
+        }
+        [data-theme="dark"] {
+            --bg-body: #121212; --card-bg: #1e1e1e; --text-main: #f9fafb;
+            --text-muted: #9ca3af; --accent-red: #ff4081; --border-color: #2d2d2d;
+            --hover-bg: #2d2d2d; --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            --table-header: #181818; --input-bg: #2d2d2d;
+        }
+        * { box-sizing: border-box; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg-body); color: var(--text-main); margin: 0; padding: 40px 20px; min-height: 100vh; transition: 0.4s; }
+        .admin-container { max-width: 1000px; margin: 0 auto; background: var(--card-bg); border-radius: 20px; box-shadow: var(--shadow); padding: 30px; }
+        .admin-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; padding-bottom: 20px; border-bottom: 1px solid var(--border-color); }
+        .admin-header h1 { margin: 0; font-size: 24px; font-weight: 600; }
+        .header-controls { display: flex; gap: 15px; align-items: center; }
+        .status-badge { background: #10b981; color: white; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 6px; }
+        .status-badge.disconnected { background: #ef4444; }
+        .status-badge::before { content: ''; width: 8px; height: 8px; background: white; border-radius: 50%; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
+        .refresh-btn { background: var(--card-bg); border: 1px solid var(--border-color); color: var(--text-main); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; transition: 0.2s; }
+        .refresh-btn:hover { background: var(--hover-bg); }
+        .page-link { display: inline-flex; align-items: center; text-decoration: none; }
+        .table-container { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; text-align: left; }
+        th, td { padding: 15px; border-bottom: 1px solid var(--border-color); vertical-align: middle; }
+        th { background-color: var(--table-header); font-size: 13px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+        tr:hover td { background-color: var(--hover-bg); }
+        .color-picker-input { width: 40px; height: 40px; border: none; border-radius: 50%; cursor: pointer; padding: 0; background: none; overflow: hidden; }
+        .color-picker-input::-webkit-color-swatch-wrapper { padding: 0; }
+        .color-picker-input::-webkit-color-swatch { border: 2px solid var(--border-color); border-radius: 50%; }
+        .text-input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--input-bg); color: var(--text-main); font-size: 14px; outline: none; }
+        .text-input:focus { border-color: var(--text-muted); }
+        .action-btn { padding: 8px 16px; border-radius: 6px; border: none; font-weight: 600; font-size: 13px; cursor: pointer; transition: 0.2s; }
+        .btn-delete { background-color: #ef4444; color: white; }
+        .empty-state { text-align: center; padding: 40px; color: var(--text-muted); font-style: italic; }
+        .btn-delete:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn-delete-selected { background-color: #ef4444; color: white; padding: 9px 16px; border-radius: 6px; border: none; font-weight: 600; cursor: pointer; transition: 0.2s; }
+        .btn-delete-selected:disabled { opacity: 0.4; cursor: not-allowed; }
+        .check-col { width: 40px; text-align: center; }
+        .check-col input { width: 18px; height: 18px; cursor: pointer; }
+        tr.row-selected td { background-color: rgba(239, 68, 68, 0.08); }
+        .theme-toggle { position: fixed; top: 20px; right: 20px; background: var(--card-bg); border: 1px solid var(--border-color); color: var(--text-main); width: 44px; height: 44px; border-radius: 50%; cursor: pointer; box-shadow: var(--shadow); display: flex; align-items: center; justify-content: center; font-size: 20px; }
+    </style>
+</head>
+<body>
+    <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">🌙</button>
+
+    <div class="admin-container">
+        <div class="admin-header">
+            <h1>Database Monitor</h1>
+            <div class="header-controls">
+                <a class="refresh-btn page-link" href="index.html">Calendar Interface</a>
+                <button class="btn-delete-selected" id="deleteSelectedBtn" onclick="deleteSelected()" disabled>🗑 Delete Selected (0)</button>
+                <button class="refresh-btn" onclick="fetchAllData()">↻ Refresh</button>
+                <div class="status-badge" id="ws-status">Connected</div>
+            </div>
+        </div>
+
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="check-col"><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this.checked)" title="Select all"></th>
+                        <th>Type</th>
+                        <th>Date / Month</th>
+                        <th>Color</th>
+                        <th>Event Remark</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="adminTableBody">
+                    <tr><td colspan="6" class="empty-state">Loading data...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const SERVER_URL = 'http://localhost:3000';
+        const socket = io(SERVER_URL);
+        const tbody = document.getElementById('adminTableBody');
+        const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const EMPTY_HTML = '<tr><td colspan="6" class="empty-state">No active LEDs in the database.</td></tr>';
+
+        // ---------- Socket ----------
+        socket.on('connect', () => {
+            const el = document.getElementById('ws-status');
+            el.innerText = "Connected";
+            el.classList.remove('disconnected');
+            socket.emit('request_all_data');
+        });
+        socket.on('disconnect', () => {
+            const el = document.getElementById('ws-status');
+            el.innerText = "Disconnected";
+            el.classList.add('disconnected');
+        });
+        socket.on('led_updated', (led) => updateTableRow(led));
+        socket.on('bulk_data', (data) => renderTable(data));
+        socket.on('leds_deleted', (dateStrings) => {
+            dateStrings.forEach(removeRow);
+            refreshAfterRemoval();
+        });
+
+        // ---------- Theme ----------
+        function toggleTheme() {
+            const html = document.documentElement;
+            const newTheme = html.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('calendarTheme', newTheme);
+            document.getElementById('themeBtn').innerText = newTheme === 'dark' ? '☀️' : '🌙';
+        }
+        const savedTheme = localStorage.getItem('calendarTheme') || 'light';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        document.getElementById('themeBtn').innerText = savedTheme === 'dark' ? '☀️' : '🌙';
+
+        // ---------- Helpers ----------
+        // When was this record last changed? (falls back to the time baked into the Mongo _id)
+        function getTimestamp(led) {
+            if (led.updatedAt) return new Date(led.updatedAt).getTime();
+            if (led._id) return parseInt(led._id.substring(0, 8), 16) * 1000;
+            return Date.now();
+        }
+
+        function formatDateString(dateString, type) {
+            if (type === 'day') {
+                return DAY_NAMES[parseInt(dateString.split('-')[1])] || dateString;
+            }
+            if (type === 'month') {
+                const [year, month] = dateString.split('-');
+                const names = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+                return `${names[parseInt(month) - 1]} ${year}`;
+            }
+            const [year, month, day] = dateString.split('-');
+            const names = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            return `${parseInt(day)} ${names[parseInt(month) - 1]} ${year}`;
+        }
+
+        function getRow(dateString) { return document.getElementById(`row-${dateString}`); }
+        function allRows() { return Array.from(tbody.querySelectorAll('tr[data-ds]')); }
+        function checkedRows() { return allRows().filter(r => r.querySelector('.row-check').checked); }
+
+        // ---------- Data loading ----------
+        async function fetchAllData() {
+            try {
+                const response = await fetch(`${SERVER_URL}/api/get-state`);
+                renderTable(await response.json());
+            } catch (error) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state" style="color: #ef4444;">Failed to connect. Is server running?</td></tr>';
+            }
+        }
+
+        function renderTable(data) {
+            tbody.innerHTML = '';
+            if (!data || data.length === 0) {
+                tbody.innerHTML = EMPTY_HTML;
+            } else {
+                // Most recently changed first
+                data.sort((a, b) => getTimestamp(b) - getTimestamp(a));
+                data.forEach(led => tbody.appendChild(createRow(led)));
+            }
+            updateSelectionUI();
+        }
+
+        // ---------- Rows (built with DOM APIs, so quotes in notes can't break anything) ----------
+        function createRow(led) {
+            const tr = document.createElement('tr');
+            tr.id = `row-${led.dateString}`;
+            tr.dataset.ds = led.dateString;
+            tr.dataset.type = led.type;
+            tr.dataset.color = led.color;
+            tr.dataset.note = led.eventNote || '';
+
+            // checkbox
+            const tdCheck = document.createElement('td');
+            tdCheck.className = 'check-col';
+            const check = document.createElement('input');
+            check.type = 'checkbox';
+            check.className = 'row-check';
+            check.onchange = updateSelectionUI;
+            tdCheck.appendChild(check);
+
+            // type
+            const tdType = document.createElement('td');
+            const strong = document.createElement('strong');
+            strong.textContent = led.type.charAt(0).toUpperCase() + led.type.slice(1);
+            tdType.appendChild(strong);
+
+            // date
+            const tdDate = document.createElement('td');
+            tdDate.textContent = formatDateString(led.dateString, led.type);
+
+            // color
+            const tdColor = document.createElement('td');
+            const colorInput = document.createElement('input');
+            colorInput.type = 'color';
+            colorInput.className = 'color-picker-input';
+            colorInput.value = led.color !== '#000000' ? led.color : '#ffffff';
+            colorInput.onchange = () => {
+                tr.dataset.color = colorInput.value;
+                updateDatabase(tr);
+            };
+            tdColor.appendChild(colorInput);
+
+            // note
+            const tdNote = document.createElement('td');
+            const noteInput = document.createElement('input');
+            noteInput.type = 'text';
+            noteInput.className = 'text-input';
+            noteInput.placeholder = 'No remark...';
+            noteInput.value = led.eventNote || '';
+            noteInput.onblur = () => {
+                if (noteInput.value === tr.dataset.note) return; // unchanged: don't touch the DB
+                tr.dataset.note = noteInput.value;
+                updateDatabase(tr);
+            };
+            noteInput.onkeydown = (e) => { if (e.key === 'Enter') noteInput.blur(); };
+            tdNote.appendChild(noteInput);
+
+            // delete
+            const tdAction = document.createElement('td');
+            const delBtn = document.createElement('button');
+            delBtn.className = 'action-btn btn-delete';
+            delBtn.textContent = 'Delete';
+            delBtn.onclick = () => deleteLeds([led.dateString]);
+            tdAction.appendChild(delBtn);
+
+            tr.append(tdCheck, tdType, tdDate, tdColor, tdNote, tdAction);
+            return tr;
+        }
+
+        // Live update from the server: new/changed items jump to the TOP
+        function updateTableRow(led) {
+            const existing = getRow(led.dateString);
+
+            if (!led.isOn) {
+                if (existing) { existing.remove(); refreshAfterRemoval(); }
+                return;
+            }
+
+            if (tbody.querySelector('.empty-state')) tbody.innerHTML = '';
+
+            if (existing) {
+                existing.dataset.color = led.color;
+                existing.dataset.note = led.eventNote || '';
+                existing.querySelector('input[type="color"]').value = led.color !== '#000000' ? led.color : '#ffffff';
+                existing.querySelector('input[type="text"]').value = led.eventNote || '';
+                tbody.prepend(existing);           // move (keeps its checkbox state)
+            } else {
+                tbody.prepend(createRow(led));
+            }
+            updateSelectionUI();
+        }
+
+        function removeRow(dateString) {
+            const row = getRow(dateString);
+            if (row) row.remove();
+        }
+
+        function refreshAfterRemoval() {
+            if (allRows().length === 0) tbody.innerHTML = EMPTY_HTML;
+            updateSelectionUI();
+        }
+
+        // ---------- Selection ----------
+        function toggleSelectAll(checked) {
+            allRows().forEach(r => r.querySelector('.row-check').checked = checked);
+            updateSelectionUI();
+        }
+
+        function updateSelectionUI() {
+            const rows = allRows();
+            const selected = checkedRows();
+            rows.forEach(r => r.classList.toggle('row-selected', r.querySelector('.row-check').checked));
+
+            const btn = document.getElementById('deleteSelectedBtn');
+            btn.innerText = `🗑 Delete Selected (${selected.length})`;
+            btn.disabled = selected.length === 0;
+
+            const all = document.getElementById('selectAll');
+            all.checked = rows.length > 0 && selected.length === rows.length;
+            all.indeterminate = selected.length > 0 && selected.length < rows.length;
+        }
+
+        // ---------- Database actions ----------
+        async function updateDatabase(tr) {
+            const payload = {
+                dateString: tr.dataset.ds,
+                type: tr.dataset.type,
+                color: tr.dataset.color,
+                isOn: true,
+                eventNote: tr.dataset.note
+            };
+            try {
+                const res = await fetch(`${SERVER_URL}/api/update-led`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) throw new Error('Server error');
+            } catch (error) {
+                alert("Error updating database.");
+            }
+        }
+
+        function deleteSelected() {
+            const ids = checkedRows().map(r => r.dataset.ds);
+            if (ids.length) deleteLeds(ids);
+        }
+
+        // Permanently removes records from MongoDB
+        async function deleteLeds(dateStrings) {
+            const msg = dateStrings.length === 1
+                ? `Permanently delete ${formatDateString(dateStrings[0], getRow(dateStrings[0])?.dataset.type)} from the database?`
+                : `Permanently delete ${dateStrings.length} items from the database? This cannot be undone.`;
+            if (!confirm(msg)) return;
+
+            try {
+                const res = await fetch(`${SERVER_URL}/api/delete-leds`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dateStrings })
+                });
+                if (!res.ok) throw new Error('Server error');
+                dateStrings.forEach(removeRow);
+                refreshAfterRemoval();
+            } catch (error) {
+                alert("Failed to delete. Is the server running (and restarted with the new code)?");
+            }
+        }
+    </script>
+</body>
+</html>
